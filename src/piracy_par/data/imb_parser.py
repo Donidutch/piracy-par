@@ -37,9 +37,21 @@ __all__ = [
 ]
 
 INCIDENT_COLUMNS = [
-    "date", "time", "lat_token", "lon_token", "place", "narration", "lat_decimal",
-    "lon_decimal", "raw_details", "parse_source", "year", "incident_type",
-    "vessel_type_inferred", "vessel_type_source", "place_ok",
+    "date",
+    "time",
+    "lat_token",
+    "lon_token",
+    "place",
+    "narration",
+    "lat_decimal",
+    "lon_decimal",
+    "raw_details",
+    "parse_source",
+    "year",
+    "incident_type",
+    "vessel_type_inferred",
+    "vessel_type_source",
+    "place_ok",
 ]
 
 
@@ -263,8 +275,9 @@ def salvage_place(place: str, narration: str = "", raw: str = "") -> str:
             cand = clean_place_value(split_place_if_glued(cand)[0], n or raw)
             if place_is_ok(cand):
                 return cand
-    if re.search(r"(?i)\baround\s*\d{1,4}\b", p) and re.search(r"(?i)\b(?:nm|nautical miles?)\b",
-                                                              n + raw):
+    if re.search(r"(?i)\baround\s*\d{1,4}\b", p) and re.search(
+        r"(?i)\b(?:nm|nautical miles?)\b", n + raw
+    ):
         p2 = split_place_if_glued(re.sub(r"(?i)\baround\s*(\d{1,4})\b", r"Around \1nm", p))[0]
         if place_is_ok(p2):
             return p2
@@ -281,8 +294,14 @@ INCIDENT_PATTERNS = {
     "Hijacked": [r"\bhijack(?:ed)?\b", r"\bcommandeer(?:ed)?\b"],
     "Fired upon": [r"\bfired\b", r"\bshots?\b", r"\bopened\s+fire\b"],
     "Attempted": [r"\battempt(?:ed)?\b"],
-    "Boarding": [r"\bboard(?:ed|ing)?\b", r"\brobbers?\b", r"\bunauthori[sz]ed\s+persons?\b",
-                 r"\btheft\b", r"\bstole\b", r"\bsteal(?:ing)?\b"],
+    "Boarding": [
+        r"\bboard(?:ed|ing)?\b",
+        r"\brobbers?\b",
+        r"\bunauthori[sz]ed\s+persons?\b",
+        r"\btheft\b",
+        r"\bstole\b",
+        r"\bsteal(?:ing)?\b",
+    ],
     "Suspicious": [r"\bsuspicious\b", r"\bapproached\b"],
 }
 INCIDENT_REGEX = {k: re.compile("|".join(v), re.I) for k, v in INCIDENT_PATTERNS.items()}
@@ -373,15 +392,17 @@ def parse_lines(
     if df.empty:
         return pd.DataFrame(columns=INCIDENT_COLUMNS), failed
     df["place"] = [
-        salvage_place(p, n, r) for p, n, r in zip(df["place"], df["narration"], df["raw_details"],
-                                                  strict=True)
+        salvage_place(p, n, r)
+        for p, n, r in zip(df["place"], df["narration"], df["raw_details"], strict=True)
     ]
     for old, new in renames.items():
         df["place"] = df["place"].str.replace(old, new, regex=False)
     df["year"] = year if year is not None else df["date"].str[-4:].astype(int)
     df["incident_type"] = df["narration"].map(classify_incident_type)
-    vt = [infer_vessel_type(f"{n} {r}") for n, r in zip(df["narration"], df["raw_details"],
-                                                         strict=True)]
+    vt = [
+        infer_vessel_type(f"{n} {r}")
+        for n, r in zip(df["narration"], df["raw_details"], strict=True)
+    ]
     df["vessel_type_inferred"] = [v[0] for v in vt]
     df["vessel_type_source"] = [v[1] for v in vt]
     df["place_ok"] = df["place"].map(place_is_ok)

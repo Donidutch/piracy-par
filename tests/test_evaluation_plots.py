@@ -65,13 +65,18 @@ def test_compare_models_and_plots(tmp_path):
     }
     table, preds = compare_models(specs, y, test_size=30)
     assert set(table.index) == set(specs)
+    # in-sample fit statistics are not comparable across models (different conditioning)
+    assert not {"train_aic", "train_loglik"} & set(table.columns)
     assert table["log_score"].is_monotonic_increasing
     assert all(len(v) == 30 for v in preds.values())
 
     figs = [
         plot_one_step(y[:130], y[130:], preds),
-        plot_forecast(y, specs["PAR(1,1)"][0].forecast(10, n_sims=200, seed=0),
-                      index=pd.date_range("2023-01-02", periods=160, freq="W-MON")),
+        plot_forecast(
+            y,
+            specs["PAR(1,1)"][0].forecast(10, n_sims=200, seed=0),
+            index=pd.date_range("2023-01-02", periods=160, freq="W-MON"),
+        ),
         plot_diagnostics(y[130:], preds["PAR(1,1)"]),
     ]
     for i, fig in enumerate(figs):

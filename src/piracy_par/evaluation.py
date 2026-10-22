@@ -124,6 +124,11 @@ def compare_models(
     ``specs`` maps a display name to ``(model, X)`` where ``X`` is the full-length covariate
     matrix for that model (or ``None``). Returns a metrics table sorted by log score and a
     dict of test-period intensities.
+
+    Every model is scored on the same test observations. In-sample log-likelihoods and AIC
+    are deliberately left out: each model conditions on a different number of initial
+    observations (``max(p, q)``, 1 or ``lags``), so they are sums over different samples
+    and not comparable across models.
     """
     rows, preds = [], {}
     for name, (model, X) in specs.items():
@@ -135,8 +140,6 @@ def compare_models(
             {
                 "model": name,
                 "n_params": model.params_.size,
-                "train_loglik": model.loglik_,
-                "train_aic": model.aic_,
                 **forecast_metrics(y_te, lam),
             }
         )

@@ -19,6 +19,7 @@ Importing this module does not import Selenium or touch the network.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import logging
 import time
 from collections.abc import Callable, Iterable
@@ -33,7 +34,15 @@ from .weekly import DEDUP_COLUMNS, aggregate_weekly
 
 log = logging.getLogger(__name__)
 
-__all__ = ["year_url", "DEFAULT_TABLE_IDS", "USER_AGENT", "scrape", "parse_raw_files", "main"]
+__all__ = [
+    "year_url",
+    "DEFAULT_TABLE_IDS",
+    "USER_AGENT",
+    "ScrapeError",
+    "scrape",
+    "parse_raw_files",
+    "main",
+]
 
 CURRENT_YEAR_URL = "https://icc-ccs.org/map/"
 YEAR_URL_TEMPLATE = "https://icc-ccs.org/piracy-map-{year}/"
@@ -48,6 +57,22 @@ USER_AGENT = "piracy-par-research-scraper/0.1 (+academic count time-series proje
 MIN_DELAY = 2.0
 
 
+_SELENIUM_MISSING = (
+    "Fetching needs Selenium: install with `uv sync --extra scrape` "
+    "or `pip install piracy-par[scrape]`."
+)
+
+
+class ScrapeError(RuntimeError):
+    """None of the requested years could be fetched."""
+
+
+def _require_selenium() -> None:
+    """Fail fast, before any network request, when the optional extra is missing."""
+    if importlib.util.find_spec("selenium") is None:
+        raise ImportError(_SELENIUM_MISSING)
+
+
 def year_url(year: int, current_year: int = CURRENT_YEAR) -> str:
     return CURRENT_YEAR_URL if year >= current_year else YEAR_URL_TEMPLATE.format(year=year)
 
@@ -59,10 +84,7 @@ def make_driver(*, headless: bool = True, user_agent: str = USER_AGENT, page_tim
     try:
         from selenium import webdriver
     except ImportError as exc:  # pragma: no cover - depends on optional extra
-        raise ImportError(
-            "Fetching needs Selenium: install with `uv sync --extra scrape` "
-            "or `pip install piracy-par[scrape]`."
-        ) from exc
+        raise ImportError(_SELENIUM_MISSING) from exc
     options = webdriver.ChromeOptions()
     if headless:
         options.add_argument("--headless=new")
@@ -81,9 +103,7 @@ def fetch_page_html(driver, url: str, table_id: str | None, *, timeout: float = 
     driver.get(url)
     if table_id is None:
         css = 'table[id^="wpgmza_table_"]'
-        WebDriverWait(driver, timeout).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, css))
-        )
+        WebDriverWait(driver, timeout).until(EC.presence_of_element_located((By.CSS_SELECTOR, css)))
         table_id = driver.find_element(By.CSS_SELECTOR, css).get_attribute("id")
     else:
         WebDriverWait(driver, timeout).until(EC.presence_of_element_located((By.ID, table_id)))
@@ -143,10 +163,15 @@ def scrape(
 ) -> pd.DataFrame:
     """Fetch each year's map page, save raw details text, and parse it.
 
-    A year that fails after ``retries`` attempts is logged and skipped. Writes
+    A year that fails after ``retries`` attempts (or is disallowed by robots.txt) is logged
+    and skipped; if no year succeeds, :class:`ScrapeError` is raised. A missing Selenium
+    install raises ``ImportError`` before any network request and is not retried. Writes
     ``raw_data_{year}.csv`` and, unless ``raw_only``, ``incidents_{year}.csv``,
     ``all_incidents.csv``, ``places_list.csv`` and ``failed_lines.csv``.
     """
+    years = list(years)
+    if driver_factory is make_driver:
+        _require_selenium()
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     ids = {**DEFAULT_TABLE_IDS, **(table_ids or {})}
@@ -154,7 +179,7 @@ def scrape(
         log.warning("delay %.1fs raised to the %.1fs minimum", delay, MIN_DELAY)
         delay = MIN_DELAY
 
-    frames, failed_all = [], []
+    frames, failed_all, done = [], [], []
     driver = None
     try:
         for i, year in enumerate(years):
@@ -171,6 +196,8 @@ def scrape(
                         driver = driver_factory(headless=headless)
                     html = fetch(driver, url, ids.get(year))
                     break
+                except ImportError:
+                    raise  # a missing dependency is not a transient failure
                 except Exception as exc:  # network/browser errors: back off and retry
                     log.warning("%s attempt %d/%d failed: %s", year, attempt, retries, exc)
                     if attempt < retries:
@@ -181,6 +208,7 @@ def scrape(
             lines = extract_details_from_html(html, ids.get(year))
             pd.DataFrame({"raw_text": lines}).to_csv(out / f"raw_data_{year}.csv", index=False)
             log.info("%s: %d rows saved", year, len(lines))
+            done.append(year)
             if raw_only:
                 continue
             df, failed = parse_lines(lines, year)
@@ -190,6 +218,8 @@ def scrape(
     finally:
         if driver is not None:
             driver.quit()
+    if years and not done:
+        raise ScrapeError(f"none of the requested years {years} could be fetched")
     return _write_outputs(frames, failed_all, out) if not raw_only else pd.DataFrame()
 
 
@@ -229,10 +259,18 @@ def build_parser() -> argparse.ArgumentParser:
     f = sub.add_parser("fetch", help="fetch map pages with a headless browser and parse them")
     f.add_argument("--years", type=int, nargs="+", required=True)
     f.add_argument("--out", required=True)
-    f.add_argument("--table-id", action="append", metavar="YEAR=ID",
-                   help="override a year's table id (empty ID = auto-detect)")
-    f.add_argument("--delay", type=float, default=MIN_DELAY,
-                   help=f"seconds between page loads (minimum {MIN_DELAY})")
+    f.add_argument(
+        "--table-id",
+        action="append",
+        metavar="YEAR=ID",
+        help="override a year's table id (empty ID = auto-detect)",
+    )
+    f.add_argument(
+        "--delay",
+        type=float,
+        default=MIN_DELAY,
+        help=f"seconds between page loads (minimum {MIN_DELAY})",
+    )
     f.add_argument("--retries", type=int, default=3)
     f.add_argument("--no-headless", action="store_true")
     f.add_argument("--raw-only", action="store_true", help="save raw text, skip parsing")
@@ -253,20 +291,33 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
-    logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING,
-                        format="%(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(
+        level=logging.INFO if args.verbose else logging.WARNING,
+        format="%(levelname)s %(name)s: %(message)s",
+    )
     if args.cmd == "fetch":
-        df = scrape(args.years, args.out, table_ids=_parse_table_ids(args.table_id),
-                    delay=args.delay, retries=args.retries, raw_only=args.raw_only,
-                    headless=not args.no_headless)
+        try:
+            df = scrape(
+                args.years,
+                args.out,
+                table_ids=_parse_table_ids(args.table_id),
+                delay=args.delay,
+                retries=args.retries,
+                raw_only=args.raw_only,
+                headless=not args.no_headless,
+            )
+        except (ImportError, ScrapeError) as exc:
+            log.error("%s", exc)
+            return 1
         print(f"{len(df)} incidents written to {args.out}")
     elif args.cmd == "parse":
         df = parse_raw_files(args.raw, args.out)
         print(f"{len(df)} incidents written to {args.out}")
     elif args.cmd == "weekly":
         inc = pd.read_csv(args.incidents, dtype={"date": str})
-        weekly = aggregate_weekly(inc, freq=args.freq, by_type=args.by_type,
-                                  start=args.start, end=args.end)
+        weekly = aggregate_weekly(
+            inc, freq=args.freq, by_type=args.by_type, start=args.start, end=args.end
+        )
         weekly.to_csv(args.out, index=False, date_format="%Y-%m-%d")
         print(f"{len(weekly)} weeks written to {args.out}")
     return 0

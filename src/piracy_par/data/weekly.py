@@ -66,28 +66,39 @@ def aggregate_weekly(
     return out.reset_index().astype({c: int for c in out.columns})
 
 
-def seasonal_features(
-    dates, *, nonnegative: bool = False, harmonics: int = 1
-) -> pd.DataFrame:
-    """Annual Fourier terms ``sin/cos(2 pi k * day_of_year / 365.25)``.
+def seasonal_features(dates, *, nonnegative: bool = False, harmonics: int = 1) -> pd.DataFrame:
+    """Annual Fourier terms ``sin/cos(2 pi k * (day_of_year - 1) / 365.25)``.
 
-    ``nonnegative=True`` shifts them to ``1 + sin``/``1 + cos`` so they can enter the linear
-    PARX, which needs non-negative covariates.
+    With ``nonnegative=False`` (default) there are two signed columns per harmonic, for the
+    log-linear models and the GLM, whose covariate coefficients are unrestricted.
+
+    ``nonnegative=True`` gives four half-wave rectified columns per harmonic,
+    ``max(sin, 0)``, ``max(-sin, 0)``, ``max(cos, 0)`` and ``max(-cos, 0)``, for the linear
+    PARX, which needs non-negative covariates and coefficients. A shifted pair
+    ``1 + sin``/``1 + cos`` with non-negative coefficients could only place the seasonal peak
+    in the first quadrant of the year; the rectified basis can put it anywhere, and unlike
+    ``1 +/- sin``/``1 +/- cos`` it is not collinear with the intercept. With non-negative
+    coefficients it can only add bumps to the baseline, so it approximates a sinusoid rather
+    than reproducing one exactly.
     """
     idx = pd.DatetimeIndex(dates)
     angle = 2.0 * np.pi * (idx.day_of_year.to_numpy() - 1) / 365.25
     cols = {}
     for k in range(1, harmonics + 1):
         suffix = "" if harmonics == 1 else str(k)
-        cols[f"season_sin{suffix}"] = np.sin(k * angle)
-        cols[f"season_cos{suffix}"] = np.cos(k * angle)
-    out = pd.DataFrame(cols, index=idx)
-    return out + 1.0 if nonnegative else out
+        s, c = np.sin(k * angle), np.cos(k * angle)
+        if nonnegative:
+            cols[f"season_sin{suffix}_pos"] = np.maximum(s, 0.0)
+            cols[f"season_sin{suffix}_neg"] = np.maximum(-s, 0.0)
+            cols[f"season_cos{suffix}_pos"] = np.maximum(c, 0.0)
+            cols[f"season_cos{suffix}_neg"] = np.maximum(-c, 0.0)
+        else:
+            cols[f"season_sin{suffix}"] = s
+            cols[f"season_cos{suffix}"] = c
+    return pd.DataFrame(cols, index=idx)
 
 
-def load_weekly_counts(
-    path, *, date_col: str = "week_end", count_col: str = "count"
-) -> pd.Series:
+def load_weekly_counts(path, *, date_col: str = "week_end", count_col: str = "count") -> pd.Series:
     """Read a weekly count CSV into an integer Series indexed by date.
 
     Lines starting with ``#`` are treated as comments.

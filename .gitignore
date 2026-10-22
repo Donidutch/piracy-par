@@ -25,3 +25,10 @@ all_incidents.csv
 places_list.csv
 failed_lines.csv
 weekly_counts.csv
+
+# Guard against committing papers, notebooks, archives and secrets
+*.pdf
+*.ipynb
+*.zip
+.env
+.env.*

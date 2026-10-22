@@ -21,6 +21,8 @@ dependencies = [
 
 [project.optional-dependencies]
 scrape = ["selenium>=4.15"]
+# for `pip install ".[test]"`; uv users get pytest and ruff from the `dev` group below
+test = ["pytest>=8"]
 
 [project.scripts]
 piracy-par-scrape = "piracy_par.data.imb_scraper:main"

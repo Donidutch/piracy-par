@@ -8,8 +8,9 @@ from piracy_par.data.weekly import seasonal_features
 
 
 def _exog(n, nonnegative=False):
-    return seasonal_features(pd.date_range("2010-01-04", periods=n, freq="W-MON"),
-                             nonnegative=nonnegative)
+    return seasonal_features(
+        pd.date_range("2010-01-04", periods=n, freq="W-MON"), nonnegative=nonnegative
+    )
 
 
 # --------------------------------------------------------------------------------------
@@ -55,16 +56,36 @@ def ref_glm(theta, y, X, lags):
 
 
 CASES = [
-    ("par11", lambda: PAR(1, 1), [0.8, 0.3, 0.4], None,
-     lambda th, y, X: ref_linear(th, y, X, 1, 1)),
-    ("par21x", lambda: PARX(2, 1), [0.5, 0.2, 0.1, 0.3, 0.4, 0.2], "nonneg",
-     lambda th, y, X: ref_linear(th, y, X, 2, 1)),
-    ("par12", lambda: PAR(1, 2), [0.6, 0.25, 0.3, 0.2], None,
-     lambda th, y, X: ref_linear(th, y, X, 1, 2)),
+    (
+        "par11",
+        lambda: PAR(1, 1),
+        [0.8, 0.3, 0.4],
+        None,
+        lambda th, y, X: ref_linear(th, y, X, 1, 1),
+    ),
+    (
+        "par21x",
+        lambda: PARX(2, 1),
+        [0.5, 0.2, 0.1, 0.3, 0.4, 0.2, 0.1, 0.3],
+        "nonneg",
+        lambda th, y, X: ref_linear(th, y, X, 2, 1),
+    ),
+    (
+        "par12",
+        lambda: PAR(1, 2),
+        [0.6, 0.25, 0.3, 0.2],
+        None,
+        lambda th, y, X: ref_linear(th, y, X, 1, 2),
+    ),
     ("loglin", lambda: LogLinearPAR(), [0.3, 0.4, 0.3], None, ref_loglinear),
     ("loglinx", lambda: LogLinearPARX(), [0.2, 0.3, 0.35, 0.2, -0.1], "signed", ref_loglinear),
-    ("glm2x", lambda: PoissonGLM(lags=2), [0.3, 0.3, 0.1, 0.2, -0.1], "signed",
-     lambda th, y, X: ref_glm(th, y, X, 2)),
+    (
+        "glm2x",
+        lambda: PoissonGLM(lags=2),
+        [0.3, 0.3, 0.1, 0.2, -0.1],
+        "signed",
+        lambda th, y, X: ref_glm(th, y, X, 2),
+    ),
 ]
 
 
@@ -101,10 +122,15 @@ def test_analytic_gradient(name, make, theta, xkind, ref, data):
     np.testing.assert_allclose(model.score(theta), num, rtol=1e-4, atol=1e-3)
 
 
-def test_mle_is_stationary_point(data):
-    y = data[0]
-    model = LogLinearPAR().fit(y)
-    assert np.max(np.abs(model.score())) < 1e-2
+@pytest.mark.parametrize("make", [lambda: PAR(1, 1), lambda: LogLinearPAR()])
+def test_mle_satisfies_kkt(make, data):
+    """Score ~ 0 for free parameters; parameters on a bound or an active constraint are
+    flagged. (On these i.i.d. data the log-linear fit runs to a = 0.9999: with the
+    pre-sample intensity fixed at the sample mean, a -> 1 mimics a constant intensity.)"""
+    model = make().fit(data[0])
+    free = ~model.coef_table()["at_bound"].to_numpy()
+    assert free.any()
+    assert np.max(np.abs(model.score()[free])) < 1e-2
 
 
 def test_par_parameter_recovery():
@@ -120,7 +146,7 @@ def test_par_parameter_recovery():
 def test_parx_parameter_recovery():
     n = 3000
     X = _exog(n, nonnegative=True)
-    true = np.array([0.4, 0.3, 0.4, 0.3, 0.15])
+    true = np.array([0.4, 0.3, 0.4, 0.3, 0.15, 0.2, 0.25])
     y = PARX(1, 1).simulate(n, params=true, X=X, seed=11)
     m = PARX(1, 1).fit(y, X)
     assert np.all(np.abs(m.params_ - true) < 4 * m.bse_), (m.params_, m.bse_)
@@ -156,13 +182,16 @@ def test_glm_matches_generic_optimiser(data):
 # --------------------------------------------------------------------------------------
 # prediction / forecasting / simulation
 # --------------------------------------------------------------------------------------
-@pytest.mark.parametrize("make,xkind", [
-    (lambda: PAR(2, 1), None),
-    (lambda: PARX(1, 1), "nonneg"),
-    (lambda: LogLinearPAR(), None),
-    (lambda: LogLinearPARX(), "signed"),
-    (lambda: PoissonGLM(lags=2), "signed"),
-])
+@pytest.mark.parametrize(
+    "make,xkind",
+    [
+        (lambda: PAR(2, 1), None),
+        (lambda: PARX(1, 1), "nonneg"),
+        (lambda: LogLinearPAR(), None),
+        (lambda: LogLinearPARX(), "signed"),
+        (lambda: PoissonGLM(lags=2), "signed"),
+    ],
+)
 def test_forecast_shapes(make, xkind, data):
     y, X = data[0], _pick_X(xkind, data)
     tr, te = slice(0, 170), slice(170, 200)
@@ -220,7 +249,9 @@ def test_loglinear_stability_enforced():
     rng = np.random.default_rng(1)
     y = rng.poisson(np.exp(np.linspace(0, 3, 300)))
     m = LogLinearPAR().fit(y)
-    assert abs(m.params_[1]) + abs(m.params_[2]) < 1.0
+    a, b = m.params_[1:3]
+    assert max(abs(a), abs(b), abs(a + b)) < 1.0
+    assert m.persistence() < 1.0
     unconstrained = LogLinearPAR(stationarity=False).fit(y)
     assert abs(unconstrained.params_[1]) < 1.0
     assert unconstrained.loglik_ >= m.loglik_ - 1e-6
@@ -272,3 +303,108 @@ def test_recovery_at_large_count_scale():
     m = PAR(1, 1).fit(y)
     np.testing.assert_allclose(m.params_[1:], true[1:], atol=0.05)
     assert m.params_[0] == pytest.approx(true[0], rel=0.25)
+
+
+# --------------------------------------------------------------------------------------
+# regression tests for issues found in review
+# --------------------------------------------------------------------------------------
+def _seasonal_par_series(coef, n=3000, seed=0):
+    """Linear PAR(1,1) with a signed sinusoidal term (kept positive by construction)."""
+    S = _exog(n).to_numpy()
+    rng = np.random.default_rng(seed)
+    lam, ys = 2.0, []
+    for t in range(n):
+        lam = 1.0 + 0.3 * (ys[-1] if ys else 2) + 0.3 * lam + S[t] @ coef
+        ys.append(rng.poisson(lam))
+    return np.array(ys, dtype=float)
+
+
+def test_parx_seasonal_basis_handles_any_phase():
+    """A seasonal peak outside the first quadrant (here -sin, peak near day 270) is picked up
+    by the rectified basis; the old 1 + sin / 1 + cos basis left gamma at its bound."""
+    y = _seasonal_par_series([-0.8, 0.0])
+    X = _exog(len(y), nonnegative=True)
+    assert list(X.columns) == [
+        "season_sin_pos",
+        "season_sin_neg",
+        "season_cos_pos",
+        "season_cos_neg",
+    ]
+    assert (X.to_numpy() >= 0).all()
+    m = PARX(1, 1).fit(y, X)
+    gamma = m.params.filter(like="gamma")
+    assert gamma["gamma_season_sin_neg"] > 0.5
+    assert m.loglik_ > PAR(1, 1).fit(y).loglik_ + 100  # seasonality is captured
+
+
+def test_loglinear_opposite_signs_not_pinned():
+    """a = 0.8, b = -0.5 is stationary (max(|a|, |b|, |a+b|) < 1) though |a| + |b| > 1;
+    the default constraint must not bias the fit towards |a| + |b| = 1."""
+    true = np.array([0.6, 0.8, -0.5])
+    y = LogLinearPAR(stationarity=False).simulate(2000, params=true, seed=2)
+    m = LogLinearPAR().fit(y)
+    assert abs(m.params_[1]) + abs(m.params_[2]) > 1.0
+    assert np.all(np.abs(m.params_ - true) < 4 * m.bse_)
+    assert not m.coef_table()["at_bound"].any()
+
+
+def test_at_bound_flags_active_stationarity_constraint():
+    rng = np.random.default_rng(1)
+    y = rng.poisson(np.exp(np.linspace(0, 3, 300)))
+    m = LogLinearPAR().fit(y)
+    hi = 1 - 1e-4
+    assert m.persistence() == pytest.approx(hi, abs=1e-6)
+    flags = m.coef_table()["at_bound"]
+    assert flags["a"] and flags["b"] and not flags["d"]
+
+
+def test_glm_separation_not_reported_as_converged():
+    rng = np.random.default_rng(1)
+    x = (np.arange(200) % 2).astype(float)
+    y = np.where(x == 1, 0, rng.poisson(3, 200))
+    with pytest.warns(RuntimeWarning, match="MLE does not exist"):
+        m = PoissonGLM().fit(y, x[:, None])
+    assert not m.converged_
+    ok = PoissonGLM(lags=1).fit(rng.poisson(2.0, 200))
+    assert ok.converged_
+
+
+def test_hessian_stays_inside_bounds():
+    """At omega on its lower bound the central stencil would leave the feasible region
+    (negative intensities, penalty value); one-sided differences keep the Hessian finite."""
+    from piracy_par.models import _numeric_hessian
+
+    rng = np.random.default_rng(0)
+    y = np.r_[np.zeros(40), rng.poisson(3, 60), np.zeros(40), rng.poisson(3, 60)].astype(float)
+    m = PAR(1, 1).fit(y)
+    theta = np.array([1e-8, 0.5, 0.45])
+    bounds, _ = m._bounds_and_constraints(0)
+
+    def nll_grad(t):
+        return m._nll_grad(t, m._y, None, m._ybar)
+
+    h = 1e-5
+    below = theta - np.array([h, 0.0, 0.0])
+    assert nll_grad(below)[0] == 1e12  # infeasible: the central stencil hits the penalty
+    H = _numeric_hessian(lambda t: nll_grad(t)[1], theta, bounds)
+    forward = (nll_grad(theta + np.array([h, 0.0, 0.0]))[1] - nll_grad(theta)[1]) / h
+    assert H[0, 0] == pytest.approx(forward[0])
+    assert H[0, 0] > 0 and np.all(np.isfinite(H))
+
+
+def test_sparse_data_reaches_better_optimum():
+    """Very sparse counts: the likelihood is flat with local maxima. The extra starts must
+    reach at least the values found by an independent multistart search in review."""
+    rng = np.random.default_rng(7)
+    n = 400
+    t = np.arange(n)
+    # reproduce the review's random stream (several unrelated draws come first)
+    rng.poisson(np.linspace(1, 30, n))
+    rng.poisson(np.exp(np.cumsum(rng.normal(0, 0.1, n)) + 1))
+    rng.poisson(3, n)
+    rng.poisson(1e4 + 5e3 * np.sin(t / 10))
+    y = rng.poisson(0.1, n).astype(float)
+    Xn = np.c_[1 + np.sin(2 * np.pi * t / 52), 1 + np.cos(2 * np.pi * t / 52)]
+    assert PARX(1, 1).fit(y, Xn).loglik_ >= -144.031
+    assert LogLinearPAR().fit(y).loglik_ >= -144.341
+    assert LogLinearPARX().fit(y, Xn - 1).loglik_ >= -143.528

@@ -89,10 +89,24 @@ def plot_forecast(
     fig = Figure(figsize=(10, 4.2), facecolor=SURFACE, layout="constrained")
     ax = fig.add_subplot()
     _style(ax)
-    ax.plot(x[start:], y[start:], color=INK_2, linewidth=1.0, marker="o", markersize=2.5,
-            label="observed")
-    ax.fill_between(future_index, forecast["lower"], forecast["upper"], color=SERIES[0],
-                    alpha=0.18, linewidth=0, label="prediction interval")
+    ax.plot(
+        x[start:],
+        y[start:],
+        color=INK_2,
+        linewidth=1.0,
+        marker="o",
+        markersize=2.5,
+        label="observed",
+    )
+    ax.fill_between(
+        future_index,
+        forecast["lower"],
+        forecast["upper"],
+        color=SERIES[0],
+        alpha=0.18,
+        linewidth=0,
+        label="prediction interval",
+    )
     ax.plot(future_index, forecast["mean"], color=SERIES[0], linewidth=2, label="forecast mean")
     ax.set_ylabel("count per week", color=INK)
     ax.set_title(title, color=INK, loc="left", fontsize=11)
@@ -106,8 +120,9 @@ def _acf(x: np.ndarray, nlags: int) -> np.ndarray:
     return np.array([np.sum(x[k:] * x[: len(x) - k]) / denom for k in range(nlags + 1)])
 
 
-def plot_diagnostics(y, lam, *, title: str = "Residual diagnostics", nlags: int = 20,
-                     seed=0) -> Figure:
+def plot_diagnostics(
+    y, lam, *, title: str = "Residual diagnostics", nlags: int = 20, seed=0
+) -> Figure:
     """Pearson residuals over time, their ACF, and a randomised PIT histogram."""
     r = pearson_residuals(y, lam)
     pit = randomized_pit(y, lam, seed=seed)

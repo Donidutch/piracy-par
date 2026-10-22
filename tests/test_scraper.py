@@ -92,8 +92,10 @@ def test_parse_patterns_b_and_c():
 
 def test_split_place_is_case_sensitive():
     assert split_place_if_glued("Port of the Isles") == ("Port of the Isles", "")
-    assert split_place_if_glued("Lagos Anchorage Robbers boarded") == ("Lagos Anchorage",
-                                                                        "Robbers boarded")
+    assert split_place_if_glued("Lagos Anchorage Robbers boarded") == (
+        "Lagos Anchorage",
+        "Robbers boarded",
+    )
 
 
 def test_place_qc_and_enrichment():
@@ -175,39 +177,88 @@ def test_scrape_with_fake_browser(tmp_path, caplog):
     assert set(df["year"]) == {2024, 2025} and len(df) == 4
     assert all(s >= imb_scraper.MIN_DELAY for s in sleeps)
     assert quit_called == [True]
-    for name in ("raw_data_2024.csv", "incidents_2025.csv", "all_incidents.csv",
-                 "places_list.csv", "failed_lines.csv"):
+    for name in (
+        "raw_data_2024.csv",
+        "incidents_2025.csv",
+        "all_incidents.csv",
+        "places_list.csv",
+        "failed_lines.csv",
+    ):
         assert (tmp_path / name).exists()
 
     # offline re-parse and weekly aggregation through the CLI entry point
     out2 = tmp_path / "reparsed"
-    assert imb_scraper.main(["parse", "--raw", str(tmp_path / "raw_data_2025.csv"),
-                             "--out", str(out2)]) == 0
+    assert (
+        imb_scraper.main(
+            ["parse", "--raw", str(tmp_path / "raw_data_2025.csv"), "--out", str(out2)]
+        )
+        == 0
+    )
     weekly_csv = tmp_path / "weekly.csv"
-    assert imb_scraper.main(["weekly", "--incidents", str(tmp_path / "all_incidents.csv"),
-                             "--out", str(weekly_csv), "--by-type"]) == 0
+    assert (
+        imb_scraper.main(
+            [
+                "weekly",
+                "--incidents",
+                str(tmp_path / "all_incidents.csv"),
+                "--out",
+                str(weekly_csv),
+                "--by-type",
+            ]
+        )
+        == 0
+    )
     weekly = pd.read_csv(weekly_csv)
     assert weekly["count"].sum() == 4
     assert "count_boarding" in weekly.columns
 
 
 def test_robots_disallow_skips_year(tmp_path):
-    df = imb_scraper.scrape([2025], tmp_path, robots_check=lambda url: False,
-                            driver_factory=lambda headless: pytest.fail("no driver needed"),
-                            sleep=lambda s: None)
-    assert df.empty
+    with pytest.raises(imb_scraper.ScrapeError):
+        imb_scraper.scrape(
+            [2025],
+            tmp_path,
+            robots_check=lambda url: False,
+            driver_factory=lambda headless: pytest.fail("no driver needed"),
+            sleep=lambda s: None,
+        )
+
+
+def test_fetch_fails_fast_without_selenium(tmp_path, monkeypatch):
+    """Missing Selenium: no robots.txt request, no retries, nonzero exit code."""
+    monkeypatch.setattr(imb_scraper.importlib.util, "find_spec", lambda name: None)
+    monkeypatch.setattr(
+        imb_scraper, "robots_allowed", lambda url: pytest.fail("robots.txt must not be fetched")
+    )
+    monkeypatch.setattr(imb_scraper.time, "sleep", lambda s: pytest.fail("no backoff"))
+    assert imb_scraper.main(["fetch", "--years", "2025", "--out", str(tmp_path)]) == 1
+
+
+def test_fetch_exit_code_when_every_year_fails(tmp_path, monkeypatch):
+    def failing_scrape(*args, **kwargs):
+        raise imb_scraper.ScrapeError("none of the requested years could be fetched")
+
+    monkeypatch.setattr(imb_scraper, "scrape", failing_scrape)
+    assert imb_scraper.main(["fetch", "--years", "2025", "--out", str(tmp_path)]) == 1
 
 
 def test_weekly_aggregation_convention():
-    inc = pd.DataFrame({
-        "date": ["31.12.2024", "01.01.2025", "06.01.2025", "07.01.2025", "07.01.2025", "bad"],
-        "time": ["", "", "", "", "", ""],
-        "narration": ["a", "b", "c", "d", "d", "e"],
-    })
+    inc = pd.DataFrame(
+        {
+            "date": ["31.12.2024", "01.01.2025", "06.01.2025", "07.01.2025", "07.01.2025", "bad"],
+            "time": ["", "", "", "", "", ""],
+            "narration": ["a", "b", "c", "d", "d", "e"],
+        }
+    )
     w = aggregate_weekly(inc, start="2024-12-30", end="2025-01-27")
     # Tue-Mon weeks labelled by the closing Monday; duplicate (07.01, d) counted once
     assert list(w["week_end"].dt.strftime("%Y-%m-%d")) == [
-        "2024-12-30", "2025-01-06", "2025-01-13", "2025-01-20", "2025-01-27"]
+        "2024-12-30",
+        "2025-01-06",
+        "2025-01-13",
+        "2025-01-20",
+        "2025-01-27",
+    ]
     assert list(w["count"]) == [0, 3, 1, 0, 0]
 
 
