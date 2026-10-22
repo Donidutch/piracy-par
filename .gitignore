@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Generated outputs (example runs, scraper output)
+outputs/
+scrape_out/
+*.log
+
+# Scraped IMB data is copyrighted: never commit it
+raw_data_*.csv
+incidents_*.csv
+all_incidents.csv
+places_list.csv
+failed_lines.csv
+weekly_counts.csv
